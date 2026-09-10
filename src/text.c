@@ -13,24 +13,19 @@ static void draw_character(
     int y,
     int scale)
 {
-    int index = font_index(c);
-
-    if (index < 0)
-        return;
-
-    const unsigned char *glyph =
-        letters[index];
+    unsigned char uc = (unsigned char)c;
 
     for (int gy = 0; gy < FONTH; ++gy) {
+        unsigned char row = letters[uc][gy];
+
         for (int gx = 0; gx < FONTW; ++gx) {
 
             /*
-             * Adjust this if your font.h stores
-             * pixels in a different format.
+             * Each byte in font.h represents one row.
+             * Each bit represents one pixel.
+             * Bit 7 is the leftmost pixel.
              */
-            int byte = gy * FONTW + gx;
-
-            if (!glyph[byte])
+            if (!(row & (0x80 >> gx)))
                 continue;
 
             for (int sy = 0; sy < scale; ++sy) {
@@ -130,20 +125,29 @@ int text_render(
         malloc((size_t)size + 1);
 
     if (!buffer) {
-        fprintf(stderr,
-                "Failed to allocate text buffer\n");
+        fprintf(
+            stderr,
+            "Failed to allocate text buffer\n"
+        );
         fclose(file);
         return -1;
     }
 
     size_t read_size =
-        fread(buffer, 1, (size_t)size, file);
+        fread(
+            buffer,
+            1,
+            (size_t)size,
+            file
+        );
 
     fclose(file);
 
     if (read_size != (size_t)size) {
-        fprintf(stderr,
-                "Failed to read text file\n");
+        fprintf(
+            stderr,
+            "Failed to read text file\n"
+        );
         free(buffer);
         return -1;
     }
