@@ -30,7 +30,7 @@ static void jpg_error_exit(
 }
 
 int jpg_render(
-    FBConfig *fb,
+    FBPrinterConfig *fb,
     const char *filename)
 {
     if (!fb || !filename)

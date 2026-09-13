@@ -4,7 +4,7 @@
 #include "fbprinter.h"
 
 int ini_load(
-    FBConfig *config,
+    FBPrinterConfig *config,
     const char *filename
 );
 

@@ -1,30 +1,23 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "text.h"
 #include "framebuffer.h"
 #include "font.h"
 
 static void draw_character(
-    FBConfig *fb,
-    char c,
+    FBPrinterConfig *fb,
+    unsigned char c,
     int x,
     int y,
     int scale)
 {
-    unsigned char uc = (unsigned char)c;
-
     for (int gy = 0; gy < FONTH; ++gy) {
-        unsigned char row = letters[uc][gy];
+
+        unsigned char row = letters[c][gy];
 
         for (int gx = 0; gx < FONTW; ++gx) {
 
-            /*
-             * Each byte in font.h represents one row.
-             * Each bit represents one pixel.
-             * Bit 7 is the leftmost pixel.
-             */
             if (!(row & (0x80 >> gx)))
                 continue;
 
@@ -47,13 +40,13 @@ static void draw_character(
 }
 
 static void draw_text(
-    FBConfig *fb,
+    FBPrinterConfig *fb,
     const char *text)
 {
     int x = fb->text_x;
     int y = fb->text_y;
 
-    int scale = fb->scale;
+    int scale = fb->text_size;
 
     if (scale < 1)
         scale = 1;
@@ -62,7 +55,8 @@ static void draw_text(
 
     while (*text) {
 
-        char c = *text++;
+        unsigned char c =
+            (unsigned char)*text++;
 
         if (c == '\n') {
             x = start_x;
@@ -73,9 +67,6 @@ static void draw_text(
         if (c == '\r')
             continue;
 
-        /*
-         * Basic tab handling.
-         */
         if (c == '\t') {
             x += FONTW * scale * 4;
             continue;
@@ -94,7 +85,7 @@ static void draw_text(
 }
 
 int text_render(
-    FBConfig *fb,
+    FBPrinterConfig *fb,
     const char *filename)
 {
     if (!fb || !filename)
@@ -103,7 +94,7 @@ int text_render(
     FILE *file = fopen(filename, "rb");
 
     if (!file) {
-        perror("fopen text file");
+        perror("fopen");
         return -1;
     }
 
@@ -125,10 +116,6 @@ int text_render(
         malloc((size_t)size + 1);
 
     if (!buffer) {
-        fprintf(
-            stderr,
-            "Failed to allocate text buffer\n"
-        );
         fclose(file);
         return -1;
     }
@@ -144,10 +131,6 @@ int text_render(
     fclose(file);
 
     if (read_size != (size_t)size) {
-        fprintf(
-            stderr,
-            "Failed to read text file\n"
-        );
         free(buffer);
         return -1;
     }

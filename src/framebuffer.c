@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 
 #include <stdio.h>
 #include <string.h>
@@ -8,7 +7,7 @@
 
 #include "framebuffer.h"
 
-int fb_open(FBConfig *fb)
+int fb_open(FBPrinterConfig *fb)
 {
     if (!fb || fb->address == 0 ||
         fb->width == 0 || fb->height == 0) {
@@ -78,7 +77,7 @@ int fb_open(FBConfig *fb)
     return 0;
 }
 
-void fb_close(FBConfig *fb)
+void fb_close(FBPrinterConfig *fb)
 {
     if (!fb)
         return;
@@ -99,7 +98,7 @@ void fb_close(FBConfig *fb)
     fb->mem_fd = -1;
 }
 
-void fb_clear(FBConfig *fb)
+void fb_clear(FBPrinterConfig *fb)
 {
     if (!fb || !fb->fb_ptr)
         return;
@@ -114,7 +113,7 @@ void fb_clear(FBConfig *fb)
 }
 
 void fb_put_pixel(
-    FBConfig *fb,
+    FBPrinterConfig *fb,
     int x,
     int y,
     uint8_t r,

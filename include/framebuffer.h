@@ -3,13 +3,13 @@
 
 #include "fbprinter.h"
 
-int fb_open(FBConfig *fb);
-void fb_close(FBConfig *fb);
+int fb_open(FBPrinterConfig *config);
+void fb_close(FBPrinterConfig *config);
 
-void fb_clear(FBConfig *fb);
+void fb_clear(FBPrinterConfig *config);
 
 void fb_put_pixel(
-    FBConfig *fb,
+    FBPrinterConfig *config,
     int x,
     int y,
     uint8_t r,

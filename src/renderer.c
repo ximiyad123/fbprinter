@@ -18,7 +18,7 @@ static const char *get_extension(const char *filename)
     return dot + 1;
 }
 
-int renderer_render(FBConfig *fb)
+int renderer_render(FBPrinterConfig *fb)
 {
     if (!fb || !fb->input_file) {
         fprintf(stderr, "No input file specified\n");

@@ -1,167 +1,167 @@
 #define _DEFAULT_SOURCE
+
 #include <stdio.h>
-#include <stdlib.h>
 #include <stdint.h>
-#include <string.h>
-#include <unistd.h>
+#include <time.h>
+#include <errno.h>
 
 #include <gif_lib.h>
 
 #include "gif.h"
 #include "framebuffer.h"
 
-#define GIF_MAX_FPS       15
-#define GIF_MIN_FRAME_MS  (1000 / GIF_MAX_FPS)
+#define GIF_MAX_FPS 15
+#define GIF_MIN_FRAME_NS (1000000000LL / GIF_MAX_FPS)
 
-static int gif_get_delay(const SavedImage *frame)
+
+static void sleep_until(const struct timespec *deadline)
 {
-    if (!frame)
-        return GIF_MIN_FRAME_MS;
+    for (;;) {
+        int result = clock_nanosleep(
+            CLOCK_MONOTONIC,
+            TIMER_ABSTIME,
+            deadline,
+            NULL
+        );
 
-    for (int i = 0;
-         i < frame->ExtensionBlockCount;
-         ++i) {
+        if (result == 0)
+            return;
 
-        const ExtensionBlock *ext =
-            &frame->ExtensionBlocks[i];
-
-        if (ext->Function == GRAPHICS_EXT_FUNC_CODE &&
-            ext->ByteCount >= 4) {
-
-            /*
-             * Graphics Control Extension:
-             *
-             * Byte 0: packed fields
-             * Byte 1-2: delay in 1/100 seconds
-             * Byte 3: transparent color index
-             */
-
-            int delay_cs =
-                ext->Bytes[1] |
-                (ext->Bytes[2] << 8);
-
-            int delay_ms =
-                delay_cs * 10;
-
-            /*
-             * Some GIFs specify 0 delay.
-             * Don't allow that to turn into an
-             * uncontrolled busy loop.
-             */
-            if (delay_ms <= 0)
-                delay_ms = GIF_MIN_FRAME_MS;
-
-            /*
-             * Hard cap: never play faster than 15 FPS.
-             */
-            if (delay_ms < GIF_MIN_FRAME_MS)
-                delay_ms = GIF_MIN_FRAME_MS;
-
-            return delay_ms;
-        }
+        if (result != EINTR)
+            return;
     }
-
-    return GIF_MIN_FRAME_MS;
 }
 
-static int gif_get_transparent_index(
-    const SavedImage *frame)
+
+static void timespec_add_ns(
+    struct timespec *time,
+    int64_t nanoseconds)
 {
-    if (!frame)
+    time->tv_sec += nanoseconds / 1000000000LL;
+    time->tv_nsec += nanoseconds % 1000000000LL;
+
+    if (time->tv_nsec >= 1000000000L) {
+        time->tv_sec++;
+        time->tv_nsec -= 1000000000L;
+    }
+}
+
+
+/*
+ * Find the Graphics Control Extension belonging to a GIF frame.
+ *
+ * giflib stores extensions as ExtensionBlock structures, while
+ * DGifExtensionToGCB() expects the raw bytes from one block.
+ */
+static int get_graphics_control_block(
+    SavedImage *frame,
+    GraphicsControlBlock *gcb)
+{
+    if (!frame || !gcb)
+        return 0;
+
+    for (int i = 0; i < frame->ExtensionBlockCount; ++i) {
+        ExtensionBlock *ext = &frame->ExtensionBlocks[i];
+
+        if (ext->Function != GRAPHICS_EXT_FUNC_CODE)
+            continue;
+
+        if (ext->ByteCount <= 0 || !ext->Bytes)
+            continue;
+
+        if (DGifExtensionToGCB(
+                ext->ByteCount,
+                ext->Bytes,
+                gcb) == GIF_OK)
+            return 1;
+    }
+
+    return 0;
+}
+
+
+static int64_t get_frame_delay_ns(SavedImage *frame)
+{
+    GraphicsControlBlock gcb;
+
+    if (!get_graphics_control_block(frame, &gcb))
+        return GIF_MIN_FRAME_NS;
+
+    /*
+     * GIF DelayTime is measured in 1/100 second units.
+     */
+    int64_t delay =
+        (int64_t)gcb.DelayTime * 10000000LL;
+
+    /*
+     * Prevent zero-delay and excessively fast GIFs.
+     */
+    if (delay <= 0)
+        delay = GIF_MIN_FRAME_NS;
+
+    if (delay < GIF_MIN_FRAME_NS)
+        delay = GIF_MIN_FRAME_NS;
+
+    return delay;
+}
+
+
+static int get_transparent_index(SavedImage *frame)
+{
+    GraphicsControlBlock gcb;
+
+    if (!get_graphics_control_block(frame, &gcb))
         return -1;
 
-    for (int i = 0;
-         i < frame->ExtensionBlockCount;
-         ++i) {
+    if (gcb.TransparentColor == NO_TRANSPARENT_COLOR)
+        return -1;
 
-        const ExtensionBlock *ext =
-            &frame->ExtensionBlocks[i];
-
-        if (ext->Function == GRAPHICS_EXT_FUNC_CODE &&
-            ext->ByteCount >= 4) {
-
-            int transparent =
-                ext->Bytes[0] & 0x01;
-
-            if (transparent)
-                return ext->Bytes[3];
-        }
-    }
-
-    return -1;
+    return gcb.TransparentColor;
 }
 
-static void gif_draw_frame(
-    FBConfig *fb,
-    const SavedImage *frame,
-    int screen_width,
-    int screen_height)
+
+static void draw_frame(
+    FBPrinterConfig *fb,
+    GifFileType *gif,
+    SavedImage *frame)
 {
-    if (!fb || !frame)
+    if (!fb || !gif || !frame)
         return;
 
-    const ColorMapObject *color_map =
+    ColorMapObject *color_map =
         frame->ImageDesc.ColorMap;
 
     if (!color_map)
-        color_map = NULL;
+        color_map = gif->SColorMap;
 
-    /*
-     * GIFs can have a local color map.
-     * If none exists, the global map is used
-     * by the caller.
-     */
-
-    int transparent_index =
-        gif_get_transparent_index(frame);
-
-    int left =
-        frame->ImageDesc.Left;
-
-    int top =
-        frame->ImageDesc.Top;
-
-    int width =
-        frame->ImageDesc.Width;
-
-    int height =
-        frame->ImageDesc.Height;
-
-    if (width <= 0 || height <= 0)
+    if (!color_map)
         return;
 
-    for (int y = 0; y < height; ++y) {
+    int width = frame->ImageDesc.Width;
+    int height = frame->ImageDesc.Height;
 
-        int screen_y =
-            fb->image_y + top + y;
+    int left = frame->ImageDesc.Left;
+    int top = frame->ImageDesc.Top;
 
-        if (screen_y < 0 ||
-            screen_y >= screen_height)
-            continue;
+    int scale = fb->img_size;
 
-        for (int x = 0; x < width; ++x) {
+    if (scale < 1)
+        scale = 1;
 
-            int screen_x =
-                fb->image_x + left + x;
+    int transparent_index =
+        get_transparent_index(frame);
 
-            if (screen_x < 0 ||
-                screen_x >= screen_width)
-                continue;
+    for (int py = 0; py < height; ++py) {
+        for (int px = 0; px < width; ++px) {
 
-            size_t index =
-                (size_t)y * width + x;
+            size_t offset =
+                (size_t)py * (size_t)width +
+                (size_t)px;
 
             int color_index =
-                frame->RasterBits[index];
+                frame->RasterBits[offset];
 
-            /*
-             * Transparent GIF pixel:
-             * leave the framebuffer untouched.
-             */
             if (color_index == transparent_index)
-                continue;
-
-            if (!color_map)
                 continue;
 
             if (color_index < 0 ||
@@ -171,21 +171,102 @@ static void gif_draw_frame(
             GifColorType color =
                 color_map->Colors[color_index];
 
-            fb_put_pixel(
-                fb,
-                screen_x,
-                screen_y,
-                color.Red,
-                color.Green,
-                color.Blue,
-                255
-            );
+            int dst_x =
+                fb->image_x +
+                (left + px) * scale;
+
+            int dst_y =
+                fb->image_y +
+                (top + py) * scale;
+
+            for (int sy = 0; sy < scale; ++sy) {
+                for (int sx = 0; sx < scale; ++sx) {
+
+                    fb_put_pixel(
+                        fb,
+                        dst_x + sx,
+                        dst_y + sy,
+                        color.Red,
+                        color.Green,
+                        color.Blue,
+                        255
+                    );
+                }
+            }
         }
     }
 }
 
+
+static void dispose_background(
+    FBPrinterConfig *fb,
+    SavedImage *frame)
+{
+    if (!fb || !frame)
+        return;
+
+    GraphicsControlBlock gcb;
+
+    if (!get_graphics_control_block(frame, &gcb))
+        return;
+
+    if (gcb.DisposalMode != DISPOSE_BACKGROUND)
+        return;
+
+    /*
+     * When keeping the old framebuffer contents, don't
+     * erase the GIF frame background.
+     */
+    if (fb->keep_leftover)
+        return;
+
+    int scale = fb->img_size;
+
+    if (scale < 1)
+        scale = 1;
+
+    int width = frame->ImageDesc.Width;
+    int height = frame->ImageDesc.Height;
+
+    int left = frame->ImageDesc.Left;
+    int top = frame->ImageDesc.Top;
+
+    uint8_t r = 0;
+    uint8_t g = 0;
+    uint8_t b = 0;
+
+    for (int py = 0; py < height; ++py) {
+        for (int px = 0; px < width; ++px) {
+
+            int dst_x =
+                fb->image_x +
+                (left + px) * scale;
+
+            int dst_y =
+                fb->image_y +
+                (top + py) * scale;
+
+            for (int sy = 0; sy < scale; ++sy) {
+                for (int sx = 0; sx < scale; ++sx) {
+
+                    fb_put_pixel(
+                        fb,
+                        dst_x + sx,
+                        dst_y + sy,
+                        r,
+                        g,
+                        b,
+                        255
+                    );
+                }
+            }
+        }
+    }
+}
+
+
 int gif_render(
-    FBConfig *fb,
+    FBPrinterConfig *fb,
     const char *filename)
 {
     if (!fb || !filename)
@@ -194,24 +275,22 @@ int gif_render(
     int error = 0;
 
     GifFileType *gif =
-        DGifOpenFileName(
-            filename,
-            &error
-        );
+        DGifOpenFileName(filename, &error);
 
     if (!gif) {
         fprintf(
             stderr,
-            "Failed to open GIF: %s\n",
+            "Cannot open GIF: %s\n",
             filename
         );
+
         return -1;
     }
 
-    if (DGifSlurp(gif) == GIF_ERROR) {
+    if (DGifSlurp(gif) != GIF_OK) {
         fprintf(
             stderr,
-            "Failed to decode GIF: %s\n",
+            "Cannot decode GIF: %s\n",
             filename
         );
 
@@ -232,11 +311,24 @@ int gif_render(
         return -1;
     }
 
+
     /*
-     * Save the global color map.
+     * Absolute monotonic timing prevents rendering time
+     * from accumulating into the GIF's frame delay.
      */
-    const ColorMapObject *global_map =
-        gif->SColorMap;
+    struct timespec next_frame;
+
+    if (clock_gettime(
+            CLOCK_MONOTONIC,
+            &next_frame) != 0) {
+
+        perror("clock_gettime");
+
+        DGifCloseFile(gif, &error);
+
+        return -1;
+    }
+
 
     for (int frame_index = 0;
          frame_index < gif->ImageCount;
@@ -245,46 +337,62 @@ int gif_render(
         SavedImage *frame =
             &gif->SavedImages[frame_index];
 
+
         /*
-         * gif_draw_frame() expects the frame's
-         * local color map. If there isn't one,
-         * temporarily use the global map.
+         * Draw the current frame.
          */
-        ColorMapObject *old_map =
-            frame->ImageDesc.ColorMap;
-
-        if (!frame->ImageDesc.ColorMap)
-            frame->ImageDesc.ColorMap =
-                (ColorMapObject *)global_map;
-
-        gif_draw_frame(
+        draw_frame(
             fb,
-            frame,
-            (int)fb->width,
-            (int)fb->height
+            gif,
+            frame
         );
 
-        /*
-         * Restore the original local map pointer.
-         */
-        frame->ImageDesc.ColorMap =
-            old_map;
-
-        int delay_ms =
-            gif_get_delay(frame);
 
         /*
-         * Sleep between frames.
+         * Get GIF-specified delay, clamped
+         * to a maximum of 15 FPS.
          */
-        usleep(
-            (useconds_t)delay_ms * 1000
+        int64_t delay =
+            get_frame_delay_ns(frame);
+
+
+        /*
+         * Schedule the next frame relative to
+         * the previous scheduled frame.
+         */
+        timespec_add_ns(
+            &next_frame,
+            delay
+        );
+
+
+        /*
+         * Wait until the scheduled presentation
+         * time instead of simply sleeping after
+         * rendering.
+         */
+        sleep_until(
+            &next_frame
+        );
+
+
+        /*
+         * Handle DISPOSE_BACKGROUND after the
+         * frame's presentation interval.
+         */
+        dispose_background(
+            fb,
+            frame
         );
     }
 
-    DGifCloseFile(
-        gif,
-        &error
-    );
+
+    if (DGifCloseFile(gif, &error) != GIF_OK) {
+        fprintf(
+            stderr,
+            "Warning: failed to close GIF cleanly\n"
+        );
+    }
 
     return 0;
 }

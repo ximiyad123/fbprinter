@@ -4,7 +4,7 @@
 #include "fbprinter.h"
 
 void image_draw_rgba(
-    FBConfig *fb,
+    FBPrinterConfig *config,
     const uint8_t *pixels,
     int width,
     int height,

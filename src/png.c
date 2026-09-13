@@ -8,7 +8,7 @@
 #include "image.h"
 
 int png_render(
-    FBConfig *fb,
+    FBPrinterConfig *fb,
     const char *filename)
 {
     if (!fb || !filename)

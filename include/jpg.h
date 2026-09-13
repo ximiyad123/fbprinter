@@ -1,10 +1,10 @@
-#ifndef JPG_RENDER_H
-#define JPG_RENDER_H
+#ifndef JPG_H
+#define JPG_H
 
 #include "fbprinter.h"
 
 int jpg_render(
-    FBConfig *fb,
+    FBPrinterConfig *config,
     const char *filename
 );
 

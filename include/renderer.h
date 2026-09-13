@@ -3,6 +3,8 @@
 
 #include "fbprinter.h"
 
-int renderer_render(FBConfig *fb);
+int renderer_render(
+    FBPrinterConfig *config
+);
 
 #endif

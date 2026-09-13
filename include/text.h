@@ -4,7 +4,7 @@
 #include "fbprinter.h"
 
 int text_render(
-    FBConfig *fb,
+    FBPrinterConfig *config,
     const char *filename
 );
 

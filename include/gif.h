@@ -1,10 +1,10 @@
-#ifndef GIF_RENDER_H
-#define GIF_RENDER_H
+#ifndef GIF_H
+#define GIF_H
 
 #include "fbprinter.h"
 
 int gif_render(
-    FBConfig *fb,
+    FBPrinterConfig *config,
     const char *filename
 );
 
