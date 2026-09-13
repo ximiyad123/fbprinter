@@ -47,3 +47,61 @@ void image_draw_rgba(
         }
     }
 }
+
+
+/*
+ * Draw an RGBA image using the configured
+ * generic positioning mode.
+ */
+void image_draw_rgba_positioned(
+    FBPrinterConfig *fb,
+    const uint8_t *pixels,
+    int width,
+    int height)
+{
+    if (!fb || !pixels)
+        return;
+
+    if (width <= 0 || height <= 0)
+        return;
+
+    int scale = fb->img_size;
+
+    if (scale < 1)
+        scale = 1;
+
+
+    /*
+     * Positioning must use the final displayed size,
+     * because scaling changes the object's dimensions.
+     */
+    uint32_t displayed_width =
+        (uint32_t)width *
+        (uint32_t)scale;
+
+    uint32_t displayed_height =
+        (uint32_t)height *
+        (uint32_t)scale;
+
+
+    int x;
+    int y;
+
+    fbprinter_get_image_position(
+        fb,
+        displayed_width,
+        displayed_height,
+        &x,
+        &y
+    );
+
+
+    image_draw_rgba(
+        fb,
+        pixels,
+        width,
+        height,
+        x,
+        y
+    );
+}

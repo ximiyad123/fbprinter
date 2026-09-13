@@ -12,9 +12,27 @@ static void draw_character(
     int y,
     int scale)
 {
+    /*
+     * font.h stores printable ASCII characters starting at:
+     *
+     * letters[0]  = ' '
+     * letters[1]  = '!'
+     * ...
+     * letters[33] = 'A'
+     * ...
+     * letters[65] = 'a'
+     *
+     * Therefore the ASCII character must be converted to
+     * the corresponding font table index.
+     */
+    if (c < 32 || c > 126)
+        return;
+
+    int index = font_index((char)c);
+
     for (int gy = 0; gy < FONTH; ++gy) {
 
-        unsigned char row = letters[c][gy];
+        unsigned char row = letters[index][gy];
 
         for (int gx = 0; gx < FONTW; ++gx) {
 
@@ -39,6 +57,61 @@ static void draw_character(
     }
 }
 
+/*
+ * Draw a solid black background strip for one line of text.
+ */
+static void draw_text_background(
+    FBPrinterConfig *fb,
+    int x,
+    int y,
+    int width,
+    int height)
+{
+    for (int py = 0; py < height; ++py) {
+
+        for (int px = 0; px < width; ++px) {
+
+            fb_put_pixel(
+                fb,
+                x + px,
+                y + py,
+                0,
+                0,
+                0,
+                255
+            );
+        }
+    }
+}
+
+/*
+ * Find the width of a single line.
+ */
+static int line_width(
+    const char *text,
+    int scale)
+{
+    int width = 0;
+
+    while (*text && *text != '\n') {
+
+        unsigned char c =
+            (unsigned char)*text++;
+
+        if (c == '\r')
+            continue;
+
+        if (c == '\t') {
+            width += FONTW * scale * 4;
+            continue;
+        }
+
+        width += FONTW * scale;
+    }
+
+    return width;
+}
+
 static void draw_text(
     FBPrinterConfig *fb,
     const char *text)
@@ -55,32 +128,65 @@ static void draw_text(
 
     while (*text) {
 
-        unsigned char c =
-            (unsigned char)*text++;
+        /*
+         * Draw the black background for the current line
+         * before drawing any characters.
+         */
+        int width = line_width(text, scale);
 
-        if (c == '\n') {
-            x = start_x;
-            y += FONTH * scale;
-            continue;
-        }
-
-        if (c == '\r')
-            continue;
-
-        if (c == '\t') {
-            x += FONTW * scale * 4;
-            continue;
-        }
-
-        draw_character(
+        draw_text_background(
             fb,
-            c,
             x,
             y,
-            scale
+            width,
+            FONTH * scale
         );
 
-        x += FONTW * scale;
+        /*
+         * Draw characters until the end of this line.
+         */
+        while (*text && *text != '\n') {
+
+            unsigned char c =
+                (unsigned char)*text++;
+
+            /*
+             * Ignore carriage return.
+             */
+            if (c == '\r')
+                continue;
+
+            /*
+             * Simple tab handling.
+             */
+            if (c == '\t') {
+                x += FONTW * scale * 4;
+                continue;
+            }
+
+            draw_character(
+                fb,
+                c,
+                x,
+                y,
+                scale
+            );
+
+            /*
+             * Advance to the next character.
+             */
+            x += FONTW * scale;
+        }
+
+        /*
+         * Move to the next line.
+         */
+        if (*text == '\n') {
+            text++;
+
+            x = start_x;
+            y += FONTH * scale;
+        }
     }
 }
 
@@ -98,6 +204,9 @@ int text_render(
         return -1;
     }
 
+    /*
+     * Determine file size.
+     */
     if (fseek(file, 0, SEEK_END) != 0) {
         fclose(file);
         return -1;
@@ -112,6 +221,9 @@ int text_render(
 
     rewind(file);
 
+    /*
+     * Allocate space for the text plus the terminating NUL.
+     */
     char *buffer =
         malloc((size_t)size + 1);
 
@@ -120,6 +232,9 @@ int text_render(
         return -1;
     }
 
+    /*
+     * Read the entire file.
+     */
     size_t read_size =
         fread(
             buffer,
@@ -137,6 +252,9 @@ int text_render(
 
     buffer[size] = '\0';
 
+    /*
+     * Render the text.
+     */
     draw_text(fb, buffer);
 
     free(buffer);

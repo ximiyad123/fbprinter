@@ -8,25 +8,16 @@ LDFLAGS ?=
 
 LDLIBS += -lpng -ljpeg -lgif -lz -lm
 
-
-# ============================================================
-# Directories
-# ============================================================
-
 BUILD_DIR := build
 
-FULL_STATIC_DIR    := $(BUILD_DIR)/full-static
-STATIC_BIN_DIR     := $(BUILD_DIR)/static-bin-library
-DYNAMIC_DIR        := $(BUILD_DIR)/dynamic
-LIBRARY_DIR        := $(BUILD_DIR)/library
-STATIC_LIBRARY_DIR := $(BUILD_DIR)/static-library
+DYNAMIC_DIR := $(BUILD_DIR)/dynamic
+STATIC_DIR  := $(BUILD_DIR)/static
+LIBRARY_DIR := $(BUILD_DIR)/library
 
 OBJ_DIR := $(BUILD_DIR)/obj
 
-
-# ============================================================
-# Sources
-# ============================================================
+# PIC static third-party libraries built by Dockerfile
+PIC_DEPS := /opt/fbprinter-deps/lib
 
 LIB_SOURCES := \
 	src/libfbprinter.c \
@@ -44,61 +35,51 @@ LIB_OBJECTS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(LIB_SOURCES))
 CLI_OBJECT := $(OBJ_DIR)/main.o
 
 
-# ============================================================
-# Targets
-# ============================================================
-
 .PHONY: all \
-	full-static \
-	static-bin-library \
-	dynamic \
-	library \
-	static-library \
-	clean
+        dynamic \
+        static \
+        library-only \
+        clean
 
 
-# ============================================================
+# ------------------------------------------------------------
 # Default target
-#
-# "make" builds the static-bin-library version.
-# ============================================================
+# ------------------------------------------------------------
 
-all: static-bin-library
+all: dynamic
 
 
-# ============================================================
-# Architecture selection
-# ============================================================
+# ------------------------------------------------------------
+# Cross compilation
+# ------------------------------------------------------------
 
 ifeq ($(ARCH),arm64)
-
 CC := aarch64-linux-gnu-gcc
-
 CFLAGS += -march=armv8-a
-
 endif
-
 
 ifeq ($(ARCH),arm)
-
 CC := arm-linux-gnueabihf-gcc
-
 CFLAGS += -march=armv7-a
-
 endif
 
 
-# ============================================================
-# DYNAMIC
-#
-# Output:
+# ------------------------------------------------------------
+# Dynamic build
 #
 # build/dynamic/
 # ├── fbprinter
 # └── libfbprinter.so
 #
-# fbprinter dynamically links against libfbprinter.so.
-# ============================================================
+# libfbprinter.so contains the third-party libraries statically:
+#   libpng
+#   libjpeg-turbo
+#   giflib
+#   zlib
+#
+# Runtime dependency:
+#   libc
+# ------------------------------------------------------------
 
 dynamic: \
 	$(DYNAMIC_DIR)/fbprinter \
@@ -116,8 +97,7 @@ $(DYNAMIC_DIR)/fbprinter: \
 		$(CLI_OBJECT) \
 		-L$(DYNAMIC_DIR) \
 		-lfbprinter \
-		-Wl,-rpath,'$$ORIGIN' \
-		$(LDLIBS)
+		-Wl,-rpath,'$$ORIGIN'
 
 
 $(DYNAMIC_DIR)/libfbprinter.so: $(LIB_OBJECTS)
@@ -128,21 +108,55 @@ $(DYNAMIC_DIR)/libfbprinter.so: $(LIB_OBJECTS)
 		-Wl,-soname,libfbprinter.so.1 \
 		-o $@ \
 		$^ \
-		$(LDLIBS)
+		-L$(PIC_DEPS) \
+		-Wl,-Bstatic \
+		-lpng \
+		-ljpeg \
+		-lgif \
+		-lz \
+		-Wl,-Bdynamic \
+		-lc \
+		-lm
 
 
-# ============================================================
-# LIBRARY
+# ------------------------------------------------------------
+# Fully static build
 #
-# Output:
+# build/static/
+# └── fbprinter
+# ------------------------------------------------------------
+
+static: \
+	$(STATIC_DIR)/fbprinter
+
+
+$(STATIC_DIR)/fbprinter: \
+	$(CLI_OBJECT) \
+	$(LIB_OBJECTS)
+
+	@mkdir -p $(STATIC_DIR)
+
+	$(CC) $(CFLAGS) -static \
+		-o $@ \
+		$(CLI_OBJECT) \
+		$(LIB_OBJECTS) \
+		-L$(PIC_DEPS) \
+		-lpng \
+		-ljpeg \
+		-lgif \
+		-lz \
+		-lm
+
+
+# ------------------------------------------------------------
+# Library only
 #
 # build/library/
 # └── libfbprinter.so
-#
-# Only builds the shared library.
-# ============================================================
+# ------------------------------------------------------------
 
-library: $(LIBRARY_DIR)/libfbprinter.so
+library-only: \
+	$(LIBRARY_DIR)/libfbprinter.so
 
 
 $(LIBRARY_DIR)/libfbprinter.so: $(LIB_OBJECTS)
@@ -153,99 +167,20 @@ $(LIBRARY_DIR)/libfbprinter.so: $(LIB_OBJECTS)
 		-Wl,-soname,libfbprinter.so.1 \
 		-o $@ \
 		$^ \
-		$(LDLIBS)
+		-L$(PIC_DEPS) \
+		-Wl,-Bstatic \
+		-lpng \
+		-ljpeg \
+		-lgif \
+		-lz \
+		-Wl,-Bdynamic \
+		-lc \
+		-lm
 
 
-# ============================================================
-# STATIC LIBRARY
-#
-# Output:
-#
-# build/static-library/
-# └── libfbprinter.a
-#
-# Only builds the static library.
-# ============================================================
-
-static-library: $(STATIC_LIBRARY_DIR)/libfbprinter.a
-
-
-$(STATIC_LIBRARY_DIR)/libfbprinter.a: $(LIB_OBJECTS)
-
-	@mkdir -p $(STATIC_LIBRARY_DIR)
-
-	$(AR) rcs $@ $^
-
-	$(RANLIB) $@
-
-
-# ============================================================
-# STATIC-BIN-LIBRARY
-#
-# Output:
-#
-# build/static-bin-library/
-# └── fbprinter
-#
-# libfbprinter.a is linked INTO the executable.
-#
-# libfbprinter.so is NOT required.
-#
-# System libraries such as libc, libpng, libjpeg,
-# giflib and zlib remain dynamically linked.
-# ============================================================
-
-static-bin-library: \
-	$(STATIC_BIN_DIR)/fbprinter
-
-
-$(STATIC_BIN_DIR)/fbprinter: \
-	$(CLI_OBJECT) \
-	$(STATIC_LIBRARY_DIR)/libfbprinter.a
-
-	@mkdir -p $(STATIC_BIN_DIR)
-
-	$(CC) $(CFLAGS) $(LDFLAGS) \
-		-o $@ \
-		$(CLI_OBJECT) \
-		$(STATIC_LIBRARY_DIR)/libfbprinter.a \
-		$(LDLIBS)
-
-
-# ============================================================
-# FULL STATIC
-#
-# Output:
-#
-# build/full-static/
-# └── fbprinter
-#
-# Attempts to statically link EVERYTHING.
-#
-# This requires static versions of all dependencies to be
-# installed in the build environment.
-# ============================================================
-
-full-static: \
-	$(FULL_STATIC_DIR)/fbprinter
-
-
-$(FULL_STATIC_DIR)/fbprinter: \
-	$(CLI_OBJECT) \
-	$(STATIC_LIBRARY_DIR)/libfbprinter.a
-
-	@mkdir -p $(FULL_STATIC_DIR)
-
-	$(CC) $(CFLAGS) -static \
-		-o $@ \
-		$(CLI_OBJECT) \
-		$(STATIC_LIBRARY_DIR)/libfbprinter.a \
-		$(LDLIBS)
-
-
-# ============================================================
-# C OBJECT FILES
-# ============================================================
+# ------------------------------------------------------------
+# Library object files
+# ------------------------------------------------------------
 
 $(OBJ_DIR)/%.o: src/%.c
 
@@ -259,9 +194,9 @@ $(OBJ_DIR)/%.o: src/%.c
 		-o $@
 
 
-# ============================================================
-# CLI OBJECT
-# ============================================================
+# ------------------------------------------------------------
+# CLI object
+# ------------------------------------------------------------
 
 $(CLI_OBJECT): cli/main.c
 
@@ -274,10 +209,9 @@ $(CLI_OBJECT): cli/main.c
 		-o $@
 
 
-# ============================================================
-# CLEAN
-# ============================================================
+# ------------------------------------------------------------
+# Clean
+# ------------------------------------------------------------
 
 clean:
-
 	rm -rf $(BUILD_DIR)
